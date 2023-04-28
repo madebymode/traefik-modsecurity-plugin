@@ -4,8 +4,8 @@
 
 this is a fork of the original: https://github.com/acouvreur/traefik-modsecurity-plugin
 
-This fork introduces alpine images, and a custom http.transport, and a caching layer once mod-security has processed a request
-
+This fork introduces alpine images, and a custom http.transport, and a caching layer once mod-security has processed a
+request
 
 see:  https://github.com/traefik/plugindemo#troubleshooting
 
@@ -73,16 +73,11 @@ This plugin supports these configuration:
 * `cacheConditionsNoBody`: (optional) Specifies if requests with no body (content-length of 0) should be cached. (
   default true)
 
-* `cacheKeyIncludeMethod`: (optional) Specifies if the HTTP method should be included in the cache key. (default
-  true)
 * `cacheKeyIncludeHost`: (optional) Specifies if the host should be included in the cache key. (default true)
-* `cacheKeyIncludeRequestURI`: (optional) Specifies if the request URI should be included in the cache key. (default
-  true)
+* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache key (default false)
 * `cacheKeyIncludeHeaders`: (optional) Specifies if the headers should be included in the cache key. (default false)
 * `cacheKeyHeaders`: (optional) An array of specific headers to be included in the cache key when
-  CacheKeyIncludeHeaders is true. (default ["Authorization", "User-Agent", "Cache-Control"])
-* `cacheKeyMatchAllHeaders`: (optional) Specifies if all headers should be included in the cache key when
-  CacheKeyIncludeHeaders is true. (default false)
+  CacheKeyIncludeHeaders is true. (ie: ["User-Agent"]) - note some headers are ALWAYS blacklisted, and even if you list them here, they will still not be cached `Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)`
 
 **Note**: body of every (non-cached) request will be buffered in memory while the request is in-flight (i.e.: during the
 security

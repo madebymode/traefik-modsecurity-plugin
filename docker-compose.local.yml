@@ -28,7 +28,7 @@ services:
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeHost=true
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeRequestURI=true
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeHeaders=true
-      - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyHeaders=["Authorization", "User-Agent", "Cache-Control"]
+      - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyHeaders=["User-Agent]
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyMatchAllHeaders=false
 
 

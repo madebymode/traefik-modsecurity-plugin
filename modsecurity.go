@@ -31,20 +31,11 @@ type Config struct {
 	// CacheConditionsNoBody specifies if requests with no body (content-length of 0) should be cached.
 	CacheConditionsNoBody *bool `json:"cacheConditionsNoBody,omitempty"`
 
-	// CacheKeyIncludeMethod specifies if the HTTP method should be included in the cache key.
-	CacheKeyIncludeMethod *bool `json:"cacheKeyIncludeMethod,omitempty"`
-
-	// CacheKeyIncludeRequestURI specifies if the request URI should be included in the cache key.
-	CacheKeyIncludeRequestURI *bool `json:"cacheKeyIncludeRequestURI,omitempty"`
-
 	// CacheKeyIncludeHeaders specifies if the headers should be included in the cache key.
 	CacheKeyIncludeHeaders *bool `json:"cacheKeyIncludeHeaders,omitempty"`
 
 	// CacheKeyHeaders lists the specific headers to be included in the cache key when CacheKeyIncludeHeaders is true.
 	CacheKeyHeaders []string `json:"cacheKeyHeaders,omitempty"`
-
-	// CacheKeyMatchAllHeaders specifies if all headers should be included in the cache key when CacheKeyIncludeHeaders is true.
-	CacheKeyMatchAllHeaders *bool `json:"cacheKeyMatchAllHeaders,omitempty"`
 
 	// CacheKeyIncludeHost specifies if the host should be included in the cache key.
 	CacheKeyIncludeHost *bool `json:"cacheKeyIncludeHost,omitempty"`
@@ -68,10 +59,7 @@ func CreateConfig() *Config {
 		CacheConditionsNoBody:  boolPtr(true),
 
 		CacheKeyIncludeHost:          boolPtr(true),
-		CacheKeyIncludeMethod:        boolPtr(true),
-		CacheKeyIncludeRequestURI:    boolPtr(true),
 		CacheKeyIncludeHeaders:       boolPtr(false),
-		CacheKeyMatchAllHeaders:      boolPtr(false),
 		CacheKeyHeaders:              []string{"Authorization", "User-Agent", "Cache-Control"},
 		CacheKeyIncludeRemoteAddress: boolPtr(false),
 	}
@@ -97,10 +85,7 @@ func CreateConfig() *Config {
 		// Options that determine how the cache key is generated.
 		// In this case, the cache key will include the request method and URI, but not the headers, host, or body.
 		CacheKey: CacheKeyOptions{
-			IncludeMethod:        init.CacheKeyIncludeMethod,
-			IncludeRequestURI:    init.CacheKeyIncludeRequestURI,
 			IncludeHeaders:       init.CacheKeyIncludeHeaders,
-			MatchAllHeaders:      init.CacheKeyMatchAllHeaders,
 			Headers:              init.CacheKeyHeaders,
 			IncludeHost:          init.CacheKeyIncludeHost,
 			IncludeRemoteAddress: init.CacheKeyIncludeRemoteAddress,

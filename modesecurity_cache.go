@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 )
 
 // CacheKeyConditions contains the conditions for generating a cache key.
@@ -17,13 +19,18 @@ type CacheKeyConditions struct {
 
 // CacheKeyOptions contains the options for generating a cache key.
 type CacheKeyOptions struct {
-	IncludeMethod        *bool
-	IncludeRequestURI    *bool
 	IncludeHeaders       *bool
 	Headers              []string
-	MatchAllHeaders      *bool
 	IncludeHost          *bool
 	IncludeRemoteAddress *bool
+}
+
+var blacklistHeaders = map[string]bool{
+	"Authorization": true,
+	"Set-Cookie":    true,
+	"Cache-Control": true,
+	"Pragma":        true,
+	"Expires":       true,
 }
 
 // Check evaluates if the current request meets the caching conditions.
@@ -35,6 +42,23 @@ func (c *CacheKeyConditions) Check(req *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func isHeaderBlacklisted(headerKey string, headerValue string) bool {
+	if blacklistHeaders[headerKey] {
+		if headerKey == "Cache-Control" {
+			return contains(strings.Split(headerValue, ","), "no-store")
+		} else if headerKey == "Pragma" {
+			return headerValue == "no-cache"
+		} else if headerKey == "Expires" {
+			expiresTime, err := time.Parse(time.RFC1123, headerValue)
+			if err == nil {
+				return expiresTime.Before(time.Now())
+			}
+		}
+		return true
+	}
+	return false
 }
 
 var cacheResponsePool = sync.Pool{
@@ -70,34 +94,29 @@ func putResponse(resp *http.Response) {
 func generateCacheKey(req *http.Request, options CacheKeyOptions) string {
 	hasher := sha256.New()
 
-	if options.IncludeMethod != nil && *options.IncludeMethod {
-		hasher.Write([]byte(req.Method))
-	}
+	//always cache the method
+	hasher.Write([]byte(req.Method))
 
-	if options.IncludeRequestURI != nil && *options.IncludeRequestURI {
-		cleanedURL := removeTrackingParams(req.RequestURI)
-		hasher.Write([]byte(cleanedURL))
-	}
+	//always cache the uri
+	cleanedURL := removeTrackingParams(req.RequestURI)
+	hasher.Write([]byte(cleanedURL))
 
 	if options.IncludeHeaders != nil && *options.IncludeHeaders {
-		if options.MatchAllHeaders != nil && *options.MatchAllHeaders {
-			for key, values := range req.Header {
-				hasher.Write([]byte(key))
-				for _, value := range values {
-					hasher.Write([]byte(value))
+		if options.IncludeHeaders != nil && *options.IncludeHeaders {
+			if len(options.Headers) > 0 {
+				headerKeys := make(map[string]struct{}, len(options.Headers))
+				for _, key := range options.Headers {
+					headerKeys[key] = struct{}{}
 				}
-			}
-		} else {
-			headerKeys := make(map[string]struct{}, len(options.Headers))
-			for _, key := range options.Headers {
-				headerKeys[key] = struct{}{}
-			}
 
-			for key, values := range req.Header {
-				if _, ok := headerKeys[key]; ok {
-					hasher.Write([]byte(key))
-					for _, value := range values {
-						hasher.Write([]byte(value))
+				for key, values := range req.Header {
+					if _, ok := headerKeys[key]; ok {
+						if !isHeaderBlacklisted(key, values[0]) {
+							hasher.Write([]byte(key))
+							for _, value := range values {
+								hasher.Write([]byte(value))
+							}
+						}
 					}
 				}
 			}
