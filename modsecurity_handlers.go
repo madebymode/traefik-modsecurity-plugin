@@ -1,47 +1,56 @@
 package traefik_modsecurity_plugin
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 )
 
-// HandleRequestBodyMaxSize - handle request body max size - TODO find a better way to do this
+// HandleRequestBodyMaxSize - handle request body max size
 func (a *Modsecurity) HandleRequestBodyMaxSize(rw http.ResponseWriter, req *http.Request) error {
-	bodyReader := http.MaxBytesReader(rw, req.Body, a.maxBodySize+1)
-	n, err := io.Copy(ioutil.Discard, bodyReader)
+	if req.Body == nil {
+		return nil
+	}
+
+	bodyReader := io.LimitReader(req.Body, a.maxBodySize+1)
+	bodyBuffer := new(bytes.Buffer)
+	n, err := io.Copy(bodyBuffer, bodyReader)
 	req.Body.Close()
 
 	if err != nil {
-		if err.Error() == "http: request body too large" {
-			a.logger.Printf("body max limit reached: %s", err.Error())
-			http.Error(rw, "", http.StatusRequestEntityTooLarge)
-		} else {
-			a.logger.Printf("fail to read incoming request: %s", err.Error())
-			http.Error(rw, "", http.StatusBadGateway)
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			// Request body size is within limit.
+			req.Body = ioutil.NopCloser(bodyBuffer)
+			return nil
 		}
+
+		a.logger.Printf("fail to read incoming request: %s", err.Error())
+		http.Error(rw, "", http.StatusBadGateway)
 		return err
 	}
 
-	if n > a.maxBodySize {
-		a.logger.Printf("body max limit reached: content length %d is larger than the allowed limit %d", n, a.maxBodySize)
-		http.Error(rw, "", http.StatusRequestEntityTooLarge)
-		return fmt.Errorf("http: request body too large")
+	if n <= a.maxBodySize {
+		// Request body size is within limit.
+		req.Body = ioutil.NopCloser(bodyBuffer)
+		return nil
 	}
 
-	return nil
+	a.logger.Printf("body max limit reached: content length %d is larger than the allowed limit %d", n, a.maxBodySize)
+	http.Error(rw, "", http.StatusRequestEntityTooLarge)
+	return fmt.Errorf("http: request body too large")
 }
 
 func (a *Modsecurity) HandleCacheAndForwardRequest(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 
-	//if cache is disabled, immediately forward to modsecurity
+	// If cache is disabled, immediately forward to ModSecurity
 	if !a.cacheEnabled {
 		return a.PrepareForwardedRequest(req)
 	}
 
-	//get from our memory cache if possible
+	// Get from our memory cache if possible
 	if a.cacheConditions.Check(req) {
 		resp, err := a.GetCachedResponse(req, a.cacheKey)
 		// a.logger.Printf("cache hit: %v", err == nil)
@@ -51,7 +60,7 @@ func (a *Modsecurity) HandleCacheAndForwardRequest(req *http.Request) (*http.Res
 		return resp, nil
 	}
 
-	//forward to modsecurity
+	// Forward to ModSecurity
 	resp, err := a.PrepareForwardedRequest(req)
 	if err != nil {
 		return nil, err

@@ -3,11 +3,13 @@
 package traefik_modsecurity_plugin
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"github.com/patrickmn/go-cache"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -169,12 +171,20 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// a.logger.Printf("Request to modsec: method: %s, uri: %s, headers: %s, body: %s", req.Method, req.RequestURI, req.Header, req.Body)
-	// a.logger.Printf("config.CacheConditionsMethods %v", a.cacheConditionsMethods)
-
 	var resp *http.Response
 	var respErr error
 	var reqErr error
+
+	reqBodyCopy := new(bytes.Buffer)
+	if req.Body != nil {
+		_, err := io.Copy(reqBodyCopy, req.Body)
+		if err != nil {
+			a.logger.Printf("Failed to copy request body: %s", err.Error())
+			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -186,7 +196,11 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	go func() {
 		defer wg.Done()
-		resp, respErr = a.HandleCacheAndForwardRequest(req)
+		reqCopy := req.Clone(req.Context())
+		if req.Body != nil {
+			reqCopy.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+		}
+		resp, respErr = a.HandleCacheAndForwardRequest(reqCopy)
 	}()
 
 	wg.Wait()
@@ -207,7 +221,6 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// a.logger.Printf("Response from modsec: status code: %d, headers: %v", resp.StatusCode, resp.Header)
 	a.next.ServeHTTP(rw, req)
 }
 
