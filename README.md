@@ -74,10 +74,13 @@ This plugin supports these configuration:
   default true)
 
 * `cacheKeyIncludeHost`: (optional) Specifies if the host should be included in the cache key. (default true)
-* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache key (default false)
+* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache
+  key (default false)
 * `cacheKeyIncludeHeaders`: (optional) Specifies if the headers should be included in the cache key. (default false)
 * `cacheKeyHeaders`: (optional) An array of specific headers to be included in the cache key when
-  CacheKeyIncludeHeaders is true. (ie: ["User-Agent"]) - note some headers are ALWAYS blacklisted, and even if you list them here, they will still not be cached `Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)`
+  CacheKeyIncludeHeaders is true. (ie: ["User-Agent"]) - note some headers are ALWAYS blacklisted, and even if you list
+  them here, they will still not be
+  cached `Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)`
 
 **Note**: body of every (non-cached) request will be buffered in memory while the request is in-flight (i.e.: during the
 security

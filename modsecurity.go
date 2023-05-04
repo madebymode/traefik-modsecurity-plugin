@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -163,8 +164,6 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}, nil
 }
 
-// ServeHTTP handles incoming HTTP requests, optimizing for speed and security.
-// It is the main entry point for the plugin.
 func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if isWebsocket(req) {
 		a.next.ServeHTTP(rw, req)
@@ -174,15 +173,27 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	var reqBodyCopy *bytes.Buffer
 	var reqErr error
 
-	// Check the max body size first and copy the request body, unless the content length is 0.
-	if req.ContentLength != 0 {
+	// Check for a non-zero Content-Length or the presence of a body
+	hasBody, err := requestHasBody(req)
+	if err != nil {
+		a.logger.Printf("Error checking for request body presence: %s", err.Error())
+		http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if hasBody {
 		reqErr = a.HandleRequestBodyMaxSize(rw, req)
 		if reqErr != nil {
 			return
 		}
 
-		// Copy the request body to a new buffer to avoid data races and stream issues.
-		reqBodyCopy, reqErr = copyRequestBody(req)
+		isChunked := req.TransferEncoding != nil && strings.EqualFold(req.TransferEncoding[0], "chunked")
+		if isChunked {
+			reqBodyCopy, reqErr = copyRequestBodyChunked(req)
+		} else {
+			reqBodyCopy, reqErr = copyRequestBody(req)
+		}
+
 		if reqErr != nil {
 			a.logger.Printf("Failed to copy request body: %s", reqErr.Error())
 			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
@@ -211,6 +222,8 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	a.next.ServeHTTP(rw, req)
 }
 
+const maxChunkSize = 32 * 1024 // 32 KB
+
 // copyRequestBody creates a copy of the request body to avoid data races and stream issues.
 func copyRequestBody(req *http.Request) (*bytes.Buffer, error) {
 	// If the request body is empty, return nil.
@@ -226,6 +239,51 @@ func copyRequestBody(req *http.Request) (*bytes.Buffer, error) {
 	// Set the request body to a NopCloser with the copied bytes, so it can be read multiple times.
 	req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
 	return reqBodyCopy, nil
+}
+
+func copyRequestBodyChunked(req *http.Request) (*bytes.Buffer, error) {
+	var buf bytes.Buffer
+	reader := req.Body
+
+	chunk := make([]byte, maxChunkSize)
+	for {
+		n, err := reader.Read(chunk)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		if _, writeErr := buf.Write(chunk[:n]); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+
+	return &buf, nil
+}
+
+func requestHasBody(req *http.Request) (bool, error) {
+	// Check for non-zero Content-Length
+	if req.ContentLength != 0 {
+		return true, nil
+	}
+
+	// Peek a small portion of the request body to check if there's any content
+	const maxPeekSize = 4 * 1024 // 4 KB
+	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxPeekSize))
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+
+	// If there's content, push it back to the request body
+	if len(bodyBytes) > 0 {
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), req.Body))
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // closeResponseBody is a utility function that closes the given response body.
