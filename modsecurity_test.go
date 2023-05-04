@@ -93,7 +93,7 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 		{
 			name: "Reject too big payloads",
 			request: http.Request{
-				Body: generateLargeBody(5025),
+				Body: generateLargeBody(1025),
 			},
 			wafResponse: response{
 				StatusCode: 200,

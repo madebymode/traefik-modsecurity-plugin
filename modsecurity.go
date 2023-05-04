@@ -9,12 +9,11 @@ import (
 	"fmt"
 	"github.com/patrickmn/go-cache"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"sync"
+	"strings"
 	"time"
 )
 
@@ -171,50 +170,49 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var resp *http.Response
-	var respErr error
+	var reqBodyCopy *bytes.Buffer
 	var reqErr error
 
-	reqBodyCopy := new(bytes.Buffer)
-	if req.Body != nil {
-		_, err := io.Copy(reqBodyCopy, req.Body)
-		if err != nil {
-			a.logger.Printf("Failed to copy request body: %s", err.Error())
-			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		reqErr = a.HandleRequestBodyMaxSize(rw, req)
-	}()
-
-	go func() {
-		defer wg.Done()
-		reqCopy := req.Clone(req.Context())
-		if req.Body != nil {
-			reqCopy.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
-		}
-		resp, respErr = a.HandleCacheAndForwardRequest(reqCopy)
-	}()
-
-	wg.Wait()
-
-	if reqErr != nil || respErr != nil {
+	// Check for a non-zero Content-Length or the presence of a body
+	hasBody, err := requestHasBody(req)
+	if err != nil {
+		a.logger.Printf("Error checking for request body presence: %s", err.Error())
+		http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			a.logger.Printf("fail to close response body: %s", err.Error())
+	if hasBody {
+		reqErr = a.HandleRequestBodyMaxSize(rw, req)
+		if reqErr != nil {
+			return
 		}
-	}(resp.Body)
+
+		isChunked := req.TransferEncoding != nil && strings.EqualFold(req.TransferEncoding[0], "chunked")
+		if isChunked {
+			reqBodyCopy, reqErr = copyRequestBodyChunked(req)
+		} else {
+			reqBodyCopy, reqErr = copyRequestBody(req)
+		}
+
+		if reqErr != nil {
+			a.logger.Printf("Failed to copy request body: %s", reqErr.Error())
+			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Handle the cache layer.
+	reqCopy := req.Clone(req.Context())
+	if reqBodyCopy != nil {
+		reqCopy.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	}
+	resp, respErr := a.HandleCacheAndForwardRequest(reqCopy)
+
+	if respErr != nil {
+		return
+	}
+
+	defer closeResponseBody(resp.Body, a.logger)
 
 	if resp.StatusCode >= 400 {
 		forwardResponse(resp, rw)
@@ -224,6 +222,80 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	a.next.ServeHTTP(rw, req)
 }
 
+const maxChunkSize = 32 * 1024 // 32 KB
+
+// copyRequestBody creates a copy of the request body to avoid data races and stream issues.
+func copyRequestBody(req *http.Request) (*bytes.Buffer, error) {
+	// If the request body is empty, return nil.
+	if req.Body == nil {
+		return nil, nil
+	}
+	// Create a new buffer and copy the request body into it.
+	reqBodyCopy := new(bytes.Buffer)
+	_, err := io.Copy(reqBodyCopy, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	// Set the request body to a NopCloser with the copied bytes, so it can be read multiple times.
+	req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	return reqBodyCopy, nil
+}
+
+func copyRequestBodyChunked(req *http.Request) (*bytes.Buffer, error) {
+	var buf bytes.Buffer
+	reader := req.Body
+
+	chunk := make([]byte, maxChunkSize)
+	for {
+		n, err := reader.Read(chunk)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		if _, writeErr := buf.Write(chunk[:n]); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+
+	return &buf, nil
+}
+
+func requestHasBody(req *http.Request) (bool, error) {
+	// Check for non-zero Content-Length
+	if req.ContentLength != 0 {
+		return true, nil
+	}
+
+	// Peek a small portion of the request body to check if there's any content
+	const maxPeekSize = 4 * 1024 // 4 KB
+	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxPeekSize))
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+
+	// If there's content, push it back to the request body
+	if len(bodyBytes) > 0 {
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), req.Body))
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// closeResponseBody is a utility function that closes the given response body.
+// If an error occurs while closing the body, it logs the error using the provided logger.
+func closeResponseBody(Body io.ReadCloser, logger *log.Logger) {
+	err := Body.Close()
+	if err != nil {
+		logger.Printf("fail to close response body: %s", err.Error())
+	}
+}
+
+// PrepareForwardedRequest prepares the request to be forwarded to modsecurity.
 func (a *Modsecurity) PrepareForwardedRequest(req *http.Request) (*http.Response, error) {
 	url := a.modSecurityUrl + req.RequestURI
 	proxyReq, err := http.NewRequestWithContext(context.Background(), req.Method, url, req.Body)

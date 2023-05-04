@@ -55,7 +55,7 @@ time.
 *NEW*: Caching modsecurity responses helps to minimize the overhead of processing every request and improves
 performance. By generating cache keys based on various factors like the request method, host, request URI, headers, and
 remote address, we can ensure that different requests are treated uniquely, while similar requests can be served from
-the cache. This approach helps in reducing the load on the modsecurity instance and improves response times for
+the plugins cache. This approach helps in reducing the load on the modsecurity instance and improves response times for
 requests. You can tune this to your liking but we recommend the following options:
 
 ## Configuration
@@ -74,10 +74,16 @@ This plugin supports these configuration:
   default true)
 
 * `cacheKeyIncludeHost`: (optional) Specifies if the host should be included in the cache key. (default true)
-* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache key (default false)
+* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache
+  key (default false)
 * `cacheKeyIncludeHeaders`: (optional) Specifies if the headers should be included in the cache key. (default false)
-* `cacheKeyHeaders`: (optional) An array of specific headers to be included in the cache key when
-  CacheKeyIncludeHeaders is true. (ie: ["User-Agent"]) - note some headers are ALWAYS blacklisted, and even if you list them here, they will still not be cached `Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)`
+* `cacheKeyHeaders`: (optional) An array of specific headers to be included in the cache key when CacheKeyIncludeHeaders is true. (ie: ["User-Agent"]) 
+
+note some headers are ALWAYS blacklisted, and even if you list
+them here, they will still not be cached:
+```
+Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)
+```
 
 **Note**: body of every (non-cached) request will be buffered in memory while the request is in-flight (i.e.: during the
 security
