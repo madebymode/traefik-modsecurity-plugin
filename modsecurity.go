@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -169,6 +170,9 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	var reqBodyCopy *bytes.Buffer
+	var reqErr error
+
 	// Check for a non-zero Content-Length or the presence of a body
 	hasBody, err := requestHasBody(req)
 	if err != nil {
@@ -178,13 +182,31 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	if hasBody {
-		reqErr := a.HandleRequestBodyMaxSize(rw, req)
+		reqErr = a.HandleRequestBodyMaxSize(rw, req)
 		if reqErr != nil {
+			return
+		}
+
+		isChunked := req.TransferEncoding != nil && strings.EqualFold(req.TransferEncoding[0], "chunked")
+		if isChunked {
+			reqBodyCopy, reqErr = copyRequestBodyChunked(req)
+		} else {
+			reqBodyCopy, reqErr = copyRequestBody(req)
+		}
+
+		if reqErr != nil {
+			a.logger.Printf("Failed to copy request body: %s", reqErr.Error())
+			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	resp, respErr := a.HandleCacheAndForwardRequest(req)
+	// Handle the cache layer.
+	reqCopy := req.Clone(req.Context())
+	if reqBodyCopy != nil {
+		reqCopy.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	}
+	resp, respErr := a.HandleCacheAndForwardRequest(reqCopy)
 
 	if respErr != nil {
 		return
@@ -198,6 +220,48 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	a.next.ServeHTTP(rw, req)
+}
+
+const maxChunkSize = 32 * 1024 // 32 KB
+
+// copyRequestBody creates a copy of the request body to avoid data races and stream issues.
+func copyRequestBody(req *http.Request) (*bytes.Buffer, error) {
+	// If the request body is empty, return nil.
+	if req.Body == nil {
+		return nil, nil
+	}
+	// Create a new buffer and copy the request body into it.
+	reqBodyCopy := new(bytes.Buffer)
+	_, err := io.Copy(reqBodyCopy, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	// Set the request body to a NopCloser with the copied bytes, so it can be read multiple times.
+	req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	return reqBodyCopy, nil
+}
+
+func copyRequestBodyChunked(req *http.Request) (*bytes.Buffer, error) {
+	var buf bytes.Buffer
+	reader := req.Body
+
+	chunk := make([]byte, maxChunkSize)
+	for {
+		n, err := reader.Read(chunk)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		if _, writeErr := buf.Write(chunk[:n]); writeErr != nil {
+			return nil, writeErr
+		}
+	}
+
+	return &buf, nil
 }
 
 func requestHasBody(req *http.Request) (bool, error) {
