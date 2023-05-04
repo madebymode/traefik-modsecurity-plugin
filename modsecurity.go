@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/patrickmn/go-cache"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -183,7 +182,7 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+		req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
 	}
 
 	var wg sync.WaitGroup
@@ -198,7 +197,7 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		defer wg.Done()
 		reqCopy := req.Clone(req.Context())
 		if req.Body != nil {
-			reqCopy.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+			reqCopy.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
 		}
 		resp, respErr = a.HandleCacheAndForwardRequest(reqCopy)
 	}()
