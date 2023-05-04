@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -164,56 +163,45 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}, nil
 }
 
+// ServeHTTP handles incoming HTTP requests, optimizing for speed and security.
+// It is the main entry point for the plugin.
 func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if isWebsocket(req) {
 		a.next.ServeHTTP(rw, req)
 		return
 	}
 
-	var resp *http.Response
-	var respErr error
+	var reqBodyCopy *bytes.Buffer
 	var reqErr error
 
-	reqBodyCopy := new(bytes.Buffer)
-	if req.Body != nil {
-		_, err := io.Copy(reqBodyCopy, req.Body)
-		if err != nil {
-			a.logger.Printf("Failed to copy request body: %s", err.Error())
+	// Check the max body size first and copy the request body, unless the content length is 0.
+	if req.ContentLength != 0 {
+		reqErr = a.HandleRequestBodyMaxSize(rw, req)
+		if reqErr != nil {
+			return
+		}
+
+		// Copy the request body to a new buffer to avoid data races and stream issues.
+		reqBodyCopy, reqErr = copyRequestBody(req)
+		if reqErr != nil {
+			a.logger.Printf("Failed to copy request body: %s", reqErr.Error())
 			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
-		req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// Handle the cache layer.
+	reqCopy := req.Clone(req.Context())
+	if reqBodyCopy != nil {
+		reqCopy.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	}
+	resp, respErr := a.HandleCacheAndForwardRequest(reqCopy)
 
-	go func() {
-		defer wg.Done()
-		reqErr = a.HandleRequestBodyMaxSize(rw, req)
-	}()
-
-	go func() {
-		defer wg.Done()
-		reqCopy := req.Clone(req.Context())
-		if req.Body != nil {
-			reqCopy.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
-		}
-		resp, respErr = a.HandleCacheAndForwardRequest(reqCopy)
-	}()
-
-	wg.Wait()
-
-	if reqErr != nil || respErr != nil {
+	if respErr != nil {
 		return
 	}
 
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			a.logger.Printf("fail to close response body: %s", err.Error())
-		}
-	}(resp.Body)
+	defer closeResponseBody(resp.Body, a.logger)
 
 	if resp.StatusCode >= 400 {
 		forwardResponse(resp, rw)
@@ -223,6 +211,33 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	a.next.ServeHTTP(rw, req)
 }
 
+// copyRequestBody creates a copy of the request body to avoid data races and stream issues.
+func copyRequestBody(req *http.Request) (*bytes.Buffer, error) {
+	// If the request body is empty, return nil.
+	if req.Body == nil {
+		return nil, nil
+	}
+	// Create a new buffer and copy the request body into it.
+	reqBodyCopy := new(bytes.Buffer)
+	_, err := io.Copy(reqBodyCopy, req.Body)
+	if err != nil {
+		return nil, err
+	}
+	// Set the request body to a NopCloser with the copied bytes, so it can be read multiple times.
+	req.Body = io.NopCloser(bytes.NewBuffer(reqBodyCopy.Bytes()))
+	return reqBodyCopy, nil
+}
+
+// closeResponseBody is a utility function that closes the given response body.
+// If an error occurs while closing the body, it logs the error using the provided logger.
+func closeResponseBody(Body io.ReadCloser, logger *log.Logger) {
+	err := Body.Close()
+	if err != nil {
+		logger.Printf("fail to close response body: %s", err.Error())
+	}
+}
+
+// PrepareForwardedRequest prepares the request to be forwarded to modsecurity.
 func (a *Modsecurity) PrepareForwardedRequest(req *http.Request) (*http.Response, error) {
 	url := a.modSecurityUrl + req.RequestURI
 	proxyReq, err := http.NewRequestWithContext(context.Background(), req.Method, url, req.Body)
