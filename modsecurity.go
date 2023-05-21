@@ -131,7 +131,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 
 	// dialer is a custom net.Dialer with a specified timeout and keep-alive duration.
 	dialer := &net.Dialer{
-		Timeout:   30 * time.Second, // Timeout is the maximum amount of time a dial will wait for a connect to complete.
+		Timeout:   30 * time.Second, // Timeout is the maximum amount of time a dial will wait for a connection to complete.
 		KeepAlive: 30 * time.Second, // KeepAlive specifies the interval between keep-alive probes for an active network connection.
 	}
 
