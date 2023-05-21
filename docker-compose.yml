@@ -31,7 +31,7 @@ services:
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeRemoteAddress=false
 
   waf:
-    image: owasp/modsecurity-crs:3.3.4-nginx-alpine-202303180303
+    image: owasp/modsecurity-crs:3.3.4-nginx-alpine-202304160904
     environment:
       - PARANOIA=1
       - ANOMALY_INBOUND=10

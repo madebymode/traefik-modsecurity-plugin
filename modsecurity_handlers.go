@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 )
 
@@ -22,7 +21,7 @@ func (a *Modsecurity) HandleRequestBodyMaxSize(rw http.ResponseWriter, req *http
 	if err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			// Request body size is within limit.
-			req.Body = ioutil.NopCloser(bodyBuffer)
+			req.Body = io.NopCloser(bodyBuffer)
 			return nil
 		}
 
@@ -33,7 +32,7 @@ func (a *Modsecurity) HandleRequestBodyMaxSize(rw http.ResponseWriter, req *http
 
 	if n <= a.maxBodySize {
 		// Request body size is within limit.
-		req.Body = ioutil.NopCloser(bodyBuffer)
+		req.Body = io.NopCloser(bodyBuffer)
 		return nil
 	}
 
