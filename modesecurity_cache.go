@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -72,7 +72,7 @@ var cacheResponsePool = sync.Pool{
 func newPooledCacheResponse(statusCode int, body []byte) *http.Response {
 	resp := cacheResponsePool.Get().(*http.Response)
 	resp.StatusCode = statusCode
-	resp.Body = ioutil.NopCloser(bytes.NewReader(body))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
 
 	// Set the status text based on the body
 	statusText := http.StatusText(statusCode)
