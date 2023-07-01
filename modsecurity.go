@@ -209,6 +209,8 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	resp, respErr := a.HandleCacheAndForwardRequest(reqCopy)
 
 	if respErr != nil {
+		a.logger.Printf("error handling request: %v", respErr)
+		http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
