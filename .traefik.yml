@@ -16,13 +16,11 @@ testData:
   CacheKeyIncludeRequestURI: true
   CacheKeyIncludeHeaders: false
   CacheKeyHeaders:
-    - Authorization
     - User-Agent
     - Cache-Control
   CacheKeyMatchAllHeaders: false
   CacheKeyIncludeHost: true
   CacheKeyIncludeRemoteAddress: false
-
 
 iconPath: ./img/icon.png
 bannerPath: ./img/banner.png

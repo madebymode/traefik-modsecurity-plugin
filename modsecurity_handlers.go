@@ -2,6 +2,7 @@ package traefik_modsecurity_plugin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,10 +17,10 @@ func (a *Modsecurity) HandleRequestBodyMaxSize(rw http.ResponseWriter, req *http
 	bodyReader := io.LimitReader(req.Body, a.maxBodySize+1)
 	bodyBuffer := new(bytes.Buffer)
 	n, err := io.Copy(bodyBuffer, bodyReader)
-	req.Body.Close()
+	err = req.Body.Close()
 
 	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
 			// Request body size is within limit.
 			req.Body = io.NopCloser(bodyBuffer)
 			return nil
