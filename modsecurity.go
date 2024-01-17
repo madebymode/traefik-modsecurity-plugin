@@ -60,9 +60,9 @@ func CreateConfig() *Config {
 		CacheConditionsNoBody:  boolPtr(true),
 
 		CacheKeyIncludeHost:          boolPtr(true),
-		CacheKeyIncludeHeaders:       boolPtr(false),
-		CacheKeyHeaders:              []string{"Authorization", "User-Agent", "Cache-Control"},
-		CacheKeyIncludeRemoteAddress: boolPtr(false),
+		CacheKeyIncludeHeaders:       boolPtr(true),
+		CacheKeyHeaders:              []string{"User-Agent"},
+		CacheKeyIncludeRemoteAddress: boolPtr(true),
 	}
 
 	finalize := Config{
