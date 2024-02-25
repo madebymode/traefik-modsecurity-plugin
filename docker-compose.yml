@@ -28,10 +28,10 @@ services:
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeRequestURI=true
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeHeaders=true
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyHeaders=["User-Agent]
-      - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeRemoteAddress=false
+      - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.cacheKeyIncludeRemoteAddress=true
 
   waf:
-    image: owasp/modsecurity-crs:3.3.4-nginx-alpine-202304160904
+    image: owasp/modsecurity-crs:3.3.5-apache-alpine-202402140602
     environment:
       - PARANOIA=1
       - ANOMALY_INBOUND=10
