@@ -9,18 +9,7 @@ testData:
   ModsecurityUrl: http://waf:80
   MaxBodySize: 10485760
   TimeoutMillis: 2000
-  CacheConditionsMethods:
-    - GET
-  CacheConditionsNoBody: true
-  CacheKeyIncludeMethod: true
-  CacheKeyIncludeRequestURI: true
-  CacheKeyIncludeHeaders: false
-  CacheKeyHeaders:
-    - User-Agent
-    - Cache-Control
-  CacheKeyMatchAllHeaders: false
-  CacheKeyIncludeHost: true
-  CacheKeyIncludeRemoteAddress: false
+  JailEnabled: true
 
 iconPath: ./img/icon.png
 bannerPath: ./img/banner.png

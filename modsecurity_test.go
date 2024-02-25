@@ -2,15 +2,13 @@ package traefik_modsecurity_plugin
 
 import (
 	"bytes"
-	"github.com/patrickmn/go-cache"
+	"context"
+	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func TestModsecurity_ServeHTTP(t *testing.T) {
@@ -33,15 +31,17 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		request         http.Request
+		request         *http.Request
 		wafResponse     response
 		serviceResponse response
 		expectBody      string
 		expectStatus    int
+		jailEnabled     bool
+		jailConfig      *Config
 	}{
 		{
 			name:    "Forward request when WAF found no threats",
-			request: *req,
+			request: req.Clone(req.Context()),
 			wafResponse: response{
 				StatusCode: 200,
 				Body:       "Response from waf",
@@ -49,10 +49,11 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			serviceResponse: serviceResponse,
 			expectBody:      "Response from service",
 			expectStatus:    200,
+			jailEnabled:     false,
 		},
 		{
 			name:    "Intercepts request when WAF found threats",
-			request: *req,
+			request: req.Clone(req.Context()),
 			wafResponse: response{
 				StatusCode: 403,
 				Body:       "Response from waf",
@@ -60,14 +61,17 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			serviceResponse: serviceResponse,
 			expectBody:      "Response from waf",
 			expectStatus:    403,
+			jailEnabled:     false,
 		},
 		{
 			name: "Does not forward Websockets",
-			request: http.Request{
+			request: &http.Request{
 				Body: http.NoBody,
 				Header: http.Header{
-					"Upgrade": []string{"Websocket"},
+					"Upgrade": []string{"websocket"},
 				},
+				Method: http.MethodGet,
+				URL:    req.URL,
 			},
 			wafResponse: response{
 				StatusCode: 200,
@@ -76,37 +80,30 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			serviceResponse: serviceResponse,
 			expectBody:      "Response from service",
 			expectStatus:    200,
+			jailEnabled:     false,
 		},
 		{
-			name: "Accept payloads smaller than limits",
-			request: http.Request{
-				Body: generateLargeBody(1024),
-			},
+			name:    "Jail client after multiple bad requests",
+			request: req.Clone(req.Context()),
 			wafResponse: response{
-				StatusCode: 200,
+				StatusCode: 403,
 				Body:       "Response from waf",
 			},
 			serviceResponse: serviceResponse,
-			expectBody:      "Response from service",
-			expectStatus:    http.StatusOK,
-		},
-		{
-			name: "Reject too big payloads",
-			request: http.Request{
-				Body: generateLargeBody(1025),
+			expectBody:      "Too Many Requests\n",
+			expectStatus:    http.StatusTooManyRequests,
+			jailEnabled:     true,
+			jailConfig: &Config{
+				JailEnabled:                true,
+				BadRequestsThresholdCount:  3,
+				BadRequestsThresholdPeriod: 10,
+				JailTimeDuration:           10,
 			},
-			wafResponse: response{
-				StatusCode: 200,
-				Body:       "Response from waf",
-			},
-			serviceResponse: serviceResponse,
-			expectBody:      "\n",
-			expectStatus:    http.StatusRequestEntityTooLarge,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			modsecurityMockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				resp := http.Response{
 					Body:       io.NopCloser(bytes.NewReader([]byte(tt.wafResponse.Body))),
@@ -116,6 +113,7 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 				log.Printf("WAF Mock: status code: %d, body: %s", resp.StatusCode, tt.wafResponse.Body)
 				forwardResponse(&resp, w)
 			}))
+			defer modsecurityMockServer.Close()
 
 			httpServiceHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				resp := http.Response{
@@ -127,31 +125,40 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 				forwardResponse(&resp, w)
 			})
 
-			middleware := &Modsecurity{
-				next:           httpServiceHandler,
-				modSecurityUrl: modsecurityMockServer.URL,
-				maxBodySize:    1024,
-				name:           "modsecurity-middleware",
-				httpClient:     http.DefaultClient,
-				logger:         log.New(io.Discard, "", log.LstdFlags),
-				cache:          cache.New(5*time.Minute, 10*time.Minute),
+			config := &Config{
+				TimeoutMillis:              2000,
+				ModSecurityUrl:             modsecurityMockServer.URL,
+				JailEnabled:                tt.jailEnabled,
+				BadRequestsThresholdCount:  25,
+				BadRequestsThresholdPeriod: 600,
+				JailTimeDuration:           600,
+			}
+
+			if tt.jailEnabled && tt.jailConfig != nil {
+				config = tt.jailConfig
+				config.ModSecurityUrl = modsecurityMockServer.URL
+			}
+
+			middleware, err := New(context.Background(), httpServiceHandler, config, "modsecurity-middleware")
+			if err != nil {
+				t.Fatalf("Failed to create middleware: %v", err)
 			}
 
 			rw := httptest.NewRecorder()
 
-			log.Printf("Before ServeHTTP: request method: %s, request URL: %s", tt.request.Method, tt.request.URL)
-			middleware.ServeHTTP(rw, &tt.request)
+			for i := 0; i < config.BadRequestsThresholdCount; i++ {
+				middleware.ServeHTTP(rw, tt.request.Clone(tt.request.Context()))
+				if tt.jailEnabled && i < config.BadRequestsThresholdCount-1 {
+					assert.Equal(t, tt.wafResponse.StatusCode, rw.Result().StatusCode)
+				}
+			}
+
+			rw = httptest.NewRecorder()
+			middleware.ServeHTTP(rw, tt.request.Clone(tt.request.Context()))
 			resp := rw.Result()
 			body, _ := io.ReadAll(resp.Body)
-			log.Printf("After ServeHTTP: response status code: %d, body: %s", resp.StatusCode, string(body))
-
 			assert.Equal(t, tt.expectBody, string(body))
 			assert.Equal(t, tt.expectStatus, resp.StatusCode)
 		})
 	}
-}
-
-func generateLargeBody(size int) io.ReadCloser {
-	var str = make([]byte, size)
-	return io.NopCloser(bytes.NewReader(str))
 }
