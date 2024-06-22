@@ -789,7 +789,7 @@ func yaml_parser_split_stem_comment(parser *yaml_parser_t, stem_len int) {
 	}
 
 	token := peek_token(parser)
-	if token == nil || token.typ != yaml_BLOCK_SEQUENCE_START_TOKEN && token.typ != yaml_BLOCK_MAPPING_START_TOKEN {
+	if token.typ != yaml_BLOCK_SEQUENCE_START_TOKEN && token.typ != yaml_BLOCK_MAPPING_START_TOKEN {
 		return
 	}
 
