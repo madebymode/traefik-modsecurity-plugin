@@ -96,8 +96,8 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			jailConfig: &Config{
 				JailEnabled:                true,
 				BadRequestsThresholdCount:  3,
-				BadRequestsThresholdPeriod: 10,
-				JailTimeDuration:           10,
+				BadRequestsThresholdPeriodSecs: 10,
+				JailTimeDurationSecs:           10,
 			},
 		},
 	}
@@ -130,8 +130,8 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 				ModSecurityUrl:             modsecurityMockServer.URL,
 				JailEnabled:                tt.jailEnabled,
 				BadRequestsThresholdCount:  25,
-				BadRequestsThresholdPeriod: 600,
-				JailTimeDuration:           600,
+				BadRequestsThresholdPeriodSecs: 600,
+				JailTimeDurationSecs:           600,
 			}
 
 			if tt.jailEnabled && tt.jailConfig != nil {
