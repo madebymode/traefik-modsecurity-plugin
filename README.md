@@ -4,8 +4,7 @@
 
 this is a fork of the original: https://github.com/acouvreur/traefik-modsecurity-plugin
 
-This fork introduces alpine images, and a custom http.transport, and a caching layer once mod-security has processed a
-request
+This fork introduces alpine images, CRS 4.x suppport, a custom http.transport, and a 429 jail for repeat offenders
 
 see:  https://github.com/traefik/plugindemo#troubleshooting
 
@@ -65,30 +64,8 @@ This plugin supports these configuration:
 * `modSecurityUrl`: (**mandatory**) it's the URL for the owasp/modsecurity container.
 * `timeoutMillis`: (optional) timeout in milliseconds for the http client to talk with modsecurity container. (default 2
   seconds)
-* `maxBodySize`: (optional) it's the maximum limit for requests body size. Requests exceeding this value will be
-  rejected using `HTTP 413 Request Entity Too Large`.
-  The default value for this parameter is 10MB. Zero means "use default value".
 
-* `cacheConditionsMethods`: (optional) An array of HTTP methods for which caching is allowed. (default ["GET"])
-* `cacheConditionsNoBody`: (optional) Specifies if requests with no body (content-length of 0) should be cached. (
-  default true)
 
-* `cacheKeyIncludeHost`: (optional) Specifies if the host should be included in the cache key. (default true)
-* `cacheKeyIncludeRemoteAddress`: (optional) Speifics if the remote request address should be included in the cache
-  key (default true)
-* `cacheKeyIncludeHeaders`: (optional) Specifies if the headers should be included in the cache key. (default true)
-* `cacheKeyHeaders`: (optional) An array of specific headers to be included in the cache key when CacheKeyIncludeHeaders is true. (ie: the default ["User-Agent"]) 
-
-**Note**: some headers are ALWAYS blacklisted, and even if you list
-them here, they will still not be cached:
-```
-Authorization: *, Set-Cookie: *, Cache-Control: no-store, Pragma: no-cache, Expires: -1 (date in the past)
-```
-
-**Note**: body of every (non-cached) request will be buffered in memory while the request is in-flight (i.e.: during the
-security
-check and during the request processing by traefik and the backend), so you may want to tune `maxBodySize` depending on
-how much RAM you have.
 
 ## Local development (docker-compose.local.yml)
 

@@ -34,7 +34,7 @@ services:
       - ANOMALY_INBOUND=10
       - ANOMALY_OUTBOUND=5
       - BACKEND=http://dummy
-        # New in CRS 4
+      # New in CRS 4
       - REPORTING_LEVEL=2
 
       #######################################################

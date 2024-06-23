@@ -17,39 +17,39 @@ import (
 
 // Config the plugin configuration.
 type Config struct {
-	TimeoutMillis              int64  `json:"timeoutMillis"`
-	ModSecurityUrl             string `json:"modSecurityUrl,omitempty"`
-	JailEnabled                bool   `json:"jailEnabled"`
-	BadRequestsThresholdCount  int    `json:"badRequestsThresholdCount"`
-	BadRequestsThresholdPeriod int    `json:"badRequestsThresholdPeriod"` // Period in seconds to track attempts
-	JailTimeDuration           int    `json:"jailTimeDuration"`           // How long a client spends in Jail in seconds
+	TimeoutMillis                  int64  `json:"timeoutMillis"`
+	ModSecurityUrl                 string `json:"modSecurityUrl,omitempty"`
+	JailEnabled                    bool   `json:"jailEnabled,omitempty"`
+	BadRequestsThresholdCount      int    `json:"badRequestsThresholdCount,omitempty"`
+	BadRequestsThresholdPeriodSecs int    `json:"badRequestsThresholdPeriodSecs,omitempty"` // Period in seconds to track attempts
+	JailTimeDurationSecs           int    `json:"jailTimeDurationSecs"`                     // How long a client spends in Jail in seconds
 }
 
 // CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
-		TimeoutMillis:              2000,
-		JailEnabled:                false,
-		BadRequestsThresholdCount:  25,
-		BadRequestsThresholdPeriod: 600,
-		JailTimeDuration:           600,
+		TimeoutMillis:                  2000,
+		JailEnabled:                    false,
+		BadRequestsThresholdCount:      25,
+		BadRequestsThresholdPeriodSecs: 600,
+		JailTimeDurationSecs:           600,
 	}
 }
 
 // Modsecurity a Modsecurity plugin.
 type Modsecurity struct {
-	next                       http.Handler
-	modSecurityUrl             string
-	name                       string
-	httpClient                 *http.Client
-	logger                     *log.Logger
-	jailEnabled                bool
-	badRequestsThresholdCount  int
-	badRequestsThresholdPeriod int
-	jailTimeDuration           int
-	jail                       map[string][]time.Time
-	jailRelease                map[string]time.Time
-	jailMutex                  sync.RWMutex
+	next                           http.Handler
+	modSecurityUrl                 string
+	name                           string
+	httpClient                     *http.Client
+	logger                         *log.Logger
+	jailEnabled                    bool
+	badRequestsThresholdCount      int
+	badRequestsThresholdPeriodSecs int
+	jailTimeDurationSecs           int
+	jail                           map[string][]time.Time
+	jailRelease                    map[string]time.Time
+	jailMutex                      sync.RWMutex
 }
 
 // New creates a new Modsecurity plugin with the given configuration.
@@ -89,17 +89,17 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}
 
 	return &Modsecurity{
-		modSecurityUrl:             config.ModSecurityUrl,
-		next:                       next,
-		name:                       name,
-		httpClient:                 &http.Client{Timeout: timeout, Transport: transport},
-		logger:                     log.New(os.Stdout, "", log.LstdFlags),
-		jailEnabled:                config.JailEnabled,
-		badRequestsThresholdCount:  config.BadRequestsThresholdCount,
-		badRequestsThresholdPeriod: config.BadRequestsThresholdPeriod,
-		jailTimeDuration:           config.JailTimeDuration,
-		jail:                       make(map[string][]time.Time),
-		jailRelease:                make(map[string]time.Time),
+		modSecurityUrl:                 config.ModSecurityUrl,
+		next:                           next,
+		name:                           name,
+		httpClient:                     &http.Client{Timeout: timeout, Transport: transport},
+		logger:                         log.New(os.Stdout, "", log.LstdFlags),
+		jailEnabled:                    config.JailEnabled,
+		badRequestsThresholdCount:      config.BadRequestsThresholdCount,
+		badRequestsThresholdPeriodSecs: config.BadRequestsThresholdPeriodSecs,
+		jailTimeDurationSecs:           config.JailTimeDurationSecs,
+		jail:                           make(map[string][]time.Time),
+		jailRelease:                    make(map[string]time.Time),
 	}, nil
 }
 
@@ -198,7 +198,7 @@ func (a *Modsecurity) recordOffense(clientIP string) {
 	if offenses, exists := a.jail[clientIP]; exists {
 		var newOffenses []time.Time
 		for _, offense := range offenses {
-			if now.Sub(offense) <= time.Duration(a.badRequestsThresholdPeriod)*time.Second {
+			if now.Sub(offense) <= time.Duration(a.badRequestsThresholdPeriodSecs)*time.Second {
 				newOffenses = append(newOffenses, offense)
 			}
 		}
@@ -211,7 +211,7 @@ func (a *Modsecurity) recordOffense(clientIP string) {
 	// Check if the client should be jailed
 	if len(a.jail[clientIP]) >= a.badRequestsThresholdCount {
 		a.logger.Printf("client %s reached threshold, putting in jail", clientIP)
-		a.jailRelease[clientIP] = now.Add(time.Duration(a.jailTimeDuration) * time.Second)
+		a.jailRelease[clientIP] = now.Add(time.Duration(a.jailTimeDurationSecs) * time.Second)
 	}
 }
 

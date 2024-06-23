@@ -9,9 +9,9 @@ testData:
   ModsecurityUrl: http://waf:8080
   TimeoutMillis: 2000
   JailEnabled: false
-  JailTimeDuration: 600
+  JailTimeDurationSecs: 600
   BadRequestsThresholdCount: 25
-  BadRequestsThresholdPeriod: 600
+  BadRequestsThresholdPeriodSecs: 600
 
 iconPath: ./img/icon.png
 bannerPath: ./img/banner.png
