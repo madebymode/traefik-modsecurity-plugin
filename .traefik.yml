@@ -6,21 +6,12 @@ import: github.com/madebymode/traefik-modsecurity-plugin
 summary: 'Traefik plugin to proxy requests through owasp/modsecurity-crs'
 
 testData:
-  ModsecurityUrl: http://waf:80
-  MaxBodySize: 10485760
+  ModsecurityUrl: http://waf:8080
   TimeoutMillis: 2000
-  CacheConditionsMethods:
-    - GET
-  CacheConditionsNoBody: true
-  CacheKeyIncludeMethod: true
-  CacheKeyIncludeRequestURI: true
-  CacheKeyIncludeHeaders: false
-  CacheKeyHeaders:
-    - User-Agent
-    - Cache-Control
-  CacheKeyMatchAllHeaders: false
-  CacheKeyIncludeHost: true
-  CacheKeyIncludeRemoteAddress: false
+  JailEnabled: false
+  JailTimeDurationSecs: 600
+  BadRequestsThresholdCount: 25
+  BadRequestsThresholdPeriodSecs: 600
 
 iconPath: ./img/icon.png
 bannerPath: ./img/banner.png
