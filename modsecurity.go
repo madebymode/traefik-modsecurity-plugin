@@ -17,12 +17,12 @@ import (
 
 // Config the plugin configuration.
 type Config struct {
-	TimeoutMillis                  int64  `json:"timeoutMillis"`
+	TimeoutMillis                  int64  `json:"timeoutMillis,omitempty"`
 	ModSecurityUrl                 string `json:"modSecurityUrl,omitempty"`
 	JailEnabled                    bool   `json:"jailEnabled,omitempty"`
 	BadRequestsThresholdCount      int    `json:"badRequestsThresholdCount,omitempty"`
 	BadRequestsThresholdPeriodSecs int    `json:"badRequestsThresholdPeriodSecs,omitempty"` // Period in seconds to track attempts
-	JailTimeDurationSecs           int    `json:"jailTimeDurationSecs"`                     // How long a client spends in Jail in seconds
+	JailTimeDurationSecs           int    `json:"jailTimeDurationSecs,omitempty"`                     // How long a client spends in Jail in seconds
 }
 
 // CreateConfig creates the default plugin configuration.

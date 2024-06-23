@@ -2,11 +2,13 @@ version: "3.7"
 
 services:
   traefik:
-    image: "traefik:v2.11.4"
+    image: traefik
     ports:
       - "80:80"
       - "8080:8080"
     command:
+      - "--log.level=DEBUG"
+      - "--accesslog=true"
       - --api.dashboard=true
       - --api.insecure=true
       - --experimental.plugins.traefik-modsecurity-plugin.modulename=github.com/madebymode/traefik-modsecurity-plugin
