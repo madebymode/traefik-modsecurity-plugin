@@ -12,7 +12,7 @@ services:
       - --api.dashboard=true
       - --api.insecure=true
       - --experimental.plugins.traefik-modsecurity-plugin.modulename=github.com/madebymode/traefik-modsecurity-plugin
-      - --experimental.plugins.traefik-modsecurity-plugin.version=v2.0.0
+      - --experimental.plugins.traefik-modsecurity-plugin.version=v1.6.0
       - --providers.docker=true
       - --entrypoints.http.address=:80
     volumes:
