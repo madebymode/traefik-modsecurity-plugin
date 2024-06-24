@@ -51,12 +51,6 @@ If it is > 400, then the error page is returned instead.
 The *dummy* service is created so the waf container forward the request to a service and respond with 200 OK all the
 time.
 
-*NEW*: Caching modsecurity responses helps to minimize the overhead of processing every request and improves
-performance. By generating cache keys based on various factors like the request method, host, request URI, headers, and
-remote address, we can ensure that different requests are treated uniquely, while similar requests can be served from
-the plugins modsecurity response cache. This approach helps in reducing the load on the modsecurity instance and improves response times for
-requests. You can tune this to your liking but we recommend the following options:
-
 ## Configuration
 
 This plugin supports these configuration:
