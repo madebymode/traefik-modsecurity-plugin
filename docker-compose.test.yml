@@ -1,0 +1,85 @@
+services:
+  traefik:
+    image: "traefik:v2.11.4"
+    ports:
+      - "8080:8080"  # Traefik API
+      - "8000:80"    # HTTP
+    command:
+      - "--log.level=INFO"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--accesslog"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--accesslog.format=json"
+      - "--accesslog.fields.headers.names.X-Waf-Status=keep"
+      - "--experimental.localPlugins.traefik-modsecurity-plugin.moduleName=github.com/madebymode/traefik-modsecurity-plugin"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - ".:/plugins-local/src/github.com/madebymode/traefik-modsecurity-plugin"
+      - logs-local:/var/log/traefik
+
+  waf:
+    image: owasp/modsecurity-crs:4.3.0-apache-alpine-202406090906
+    environment:
+      - PARANOIA=1
+      - ANOMALY_INBOUND=5
+      - ANOMALY_OUTBOUND=4
+      - BACKEND=http://dummy
+      - MODSEC_RULE_ENGINE=On
+      - MODSEC_REQ_BODY_LIMIT=10485760        # 10MB limit
+      - MODSEC_REQ_BODY_NOFILES_LIMIT=1048576 # 1MB limit for non-file uploads
+
+  dummy:
+    image: traefik/whoami
+
+  # Protected by WAF
+  whoami-protected:
+    image: traefik/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.protected.rule=PathPrefix(`/protected`)"
+      - "traefik.http.routers.protected.middlewares=waf-middleware"
+      - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.modSecurityUrl=http://waf:8080"
+      - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.timeoutMillis=3000"
+      - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.modSecurityStatusRequestHeader=X-Waf-Status"
+      # Optional: Configure transport parameters for high-load scenarios
+      # - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.maxConnsPerHost=20"
+      # - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.maxIdleConnsPerHost=10"  
+      # - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.responseHeaderTimeoutMillis=5000"
+      # - "traefik.http.middlewares.waf-middleware.plugin.traefik-modsecurity-plugin.expectContinueTimeoutMillis=2000"
+
+  # No WAF protection
+  whoami-bypass:
+    image: traefik/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bypass.rule=PathPrefix(`/bypass`)"
+
+  # Test service for remediation header testing
+  whoami-remediation-test:
+    image: traefik/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.remediation-test.rule=PathPrefix(`/remediation-test`)"
+      - "traefik.http.routers.remediation-test.middlewares=waf-remediation-middleware"
+      - "traefik.http.middlewares.waf-remediation-middleware.plugin.traefik-modsecurity-plugin.modSecurityUrl=http://waf:8080"
+      - "traefik.http.middlewares.waf-remediation-middleware.plugin.traefik-modsecurity-plugin.timeoutMillis=3000"
+      - "traefik.http.middlewares.waf-remediation-middleware.plugin.traefik-modsecurity-plugin.modSecurityStatusRequestHeader=X-Waf-Status"
+      - "traefik.http.middlewares.waf-remediation-middleware.plugin.traefik-modsecurity-plugin.unhealthyWafBackOffPeriodSecs=5"
+
+  # Test service for error header testing (invalid ModSecurity URL)
+  whoami-error-test:
+    image: traefik/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.error-test.rule=PathPrefix(`/error-test`)"
+      - "traefik.http.routers.error-test.middlewares=waf-error-middleware"
+      - "traefik.http.middlewares.waf-error-middleware.plugin.traefik-modsecurity-plugin.modSecurityUrl=http://invalid-waf-url:9999"
+      - "traefik.http.middlewares.waf-error-middleware.plugin.traefik-modsecurity-plugin.timeoutMillis=1000"
+      - "traefik.http.middlewares.waf-error-middleware.plugin.traefik-modsecurity-plugin.modSecurityStatusRequestHeader=X-Waf-Status"
+      - "traefik.http.middlewares.waf-error-middleware.plugin.traefik-modsecurity-plugin.unhealthyWafBackOffPeriodSecs=5"
+
+volumes:
+  logs-local:

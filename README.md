@@ -4,7 +4,7 @@
 
 this is a fork of the original: https://github.com/acouvreur/traefik-modsecurity-plugin
 
-This fork introduces alpine images, CRS 4.x suppport, a custom http.transport, and a 429 jail for repeat offenders
+This fork introduces alpine images, CRS 4.x suppport, and a custom http.transport
 
 see:  https://github.com/traefik/plugindemo#troubleshooting
 
@@ -55,13 +55,22 @@ time.
 
 This plugin supports these configuration:
 
+### Basic Configuration
+
 * `modSecurityUrl`: (**mandatory**) it's the URL for the owasp/modsecurity container.
-* `timeoutMillis`: (optional) timeout in milliseconds for the http client to talk with modsecurity container. (default 2
-  seconds)
-* `jailEnabled`:  (optional) 429 jail for repeat offenders (based on threshold settings)
-* `JailTimeDurationSecs`:  (optional) how long a client will be jailed for, in seconds
-* `badRequestsThresholdCount`: (optional) # of 403s a clientIP can trigger from OWASP before being adding to jail
-* `badRequestsThresholdPeriodSecs` (optional) # the period, in seconds, that the threshold must meet before a client is added to the 429 jail
+* `timeoutMillis`: (optional) timeout in milliseconds for the http client to talk with modsecurity container. (default 2000ms)
+* `unhealthyWafBackOffPeriodSecs` (optional) the period, in seconds, to backoff if calls to modsecurity fail. Default to 0. Default behaviour is to send a 502 Bad Gateway when there are problems communicating with modsec.
+* `modSecurityStatusRequestHeader`: (optional) name of the header to add to the request when requests are blocked by ModSecurity (for logging purposes). The header value will contain the HTTP status code returned by ModSecurity. Default is empty (no header added).
+
+### Advanced Transport Configuration
+
+These parameters allow fine-tuning of the HTTP client behavior for high-load scenarios:
+
+* `maxConnsPerHost`: (optional) maximum number of concurrent connections allowed per ModSecurity host. Set to 0 for unlimited connections (default: 0 - unlimited, original behavior).
+* `maxIdleConnsPerHost`: (optional) maximum number of idle connections to keep per ModSecurity host. Set to 0 for unlimited idle connections (default: 0 - unlimited, original behavior).
+* `responseHeaderTimeoutMillis`: (optional) timeout in milliseconds for waiting for response headers from ModSecurity. Set to 0 for no timeout (default: 0 - no timeout, original behavior).
+* `expectContinueTimeoutMillis`: (optional) timeout in milliseconds for Expect: 100-continue handshake. Used for large payload uploads (default: 1000ms).
+
 
 ## Local development (docker-compose.local.yml)
 

@@ -3,12 +3,13 @@ package traefik_modsecurity_plugin
 import (
 	"bytes"
 	"context"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestModsecurity_ServeHTTP(t *testing.T) {
@@ -30,75 +31,86 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		request         *http.Request
-		wafResponse     response
-		serviceResponse response
-		expectBody      string
-		expectStatus    int
-		jailEnabled     bool
-		jailConfig      *Config
+		name                           string
+		request                        *http.Request
+		wafResponse                    response
+		serviceResponse                response
+		expectBody                     string
+		expectStatus                   int
+		modSecurityStatusRequestHeader string
+		expectHeader                   string
+		expectHeaderValue              string
 	}{
 		{
-			name:    "Forward request when WAF found no threats",
-			request: req.Clone(req.Context()),
-			wafResponse: response{
-				StatusCode: 200,
-				Body:       "Response from waf",
-			},
-			serviceResponse: serviceResponse,
-			expectBody:      "Response from service",
-			expectStatus:    200,
-			jailEnabled:     false,
+			name:                           "Forward request when WAF found no threats",
+			request:                        req.Clone(req.Context()),
+			wafResponse:                    response{StatusCode: 200, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from service",
+			expectStatus:                   200,
+			modSecurityStatusRequestHeader: "",
+			expectHeader:                   "",
+			expectHeaderValue:              "",
 		},
 		{
-			name:    "Intercepts request when WAF found threats",
-			request: req.Clone(req.Context()),
-			wafResponse: response{
-				StatusCode: 403,
-				Body:       "Response from waf",
-			},
-			serviceResponse: serviceResponse,
-			expectBody:      "Response from waf",
-			expectStatus:    403,
-			jailEnabled:     false,
+			name:                           "Intercepts request when WAF found threats",
+			request:                        req.Clone(req.Context()),
+			wafResponse:                    response{StatusCode: 403, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from waf",
+			expectStatus:                   403,
+			modSecurityStatusRequestHeader: "",
+			expectHeader:                   "",
+			expectHeaderValue:              "",
 		},
 		{
 			name: "Does not forward Websockets",
 			request: &http.Request{
-				Body: http.NoBody,
-				Header: http.Header{
-					"Upgrade": []string{"websocket"},
-				},
+				Body:   http.NoBody,
+				Header: http.Header{"Upgrade": []string{"websocket"}},
 				Method: http.MethodGet,
 				URL:    req.URL,
 			},
-			wafResponse: response{
-				StatusCode: 200,
-				Body:       "Response from waf",
-			},
-			serviceResponse: serviceResponse,
-			expectBody:      "Response from service",
-			expectStatus:    200,
-			jailEnabled:     false,
+			wafResponse:                    response{StatusCode: 200, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from service",
+			expectStatus:                   200,
+			modSecurityStatusRequestHeader: "",
+			expectHeader:                   "",
+			expectHeaderValue:              "",
 		},
 		{
-			name:    "Jail client after multiple bad requests",
-			request: req.Clone(req.Context()),
-			wafResponse: response{
-				StatusCode: 403,
-				Body:       "Response from waf",
-			},
-			serviceResponse: serviceResponse,
-			expectBody:      "Too Many Requests\n",
-			expectStatus:    http.StatusTooManyRequests,
-			jailEnabled:     true,
-			jailConfig: &Config{
-				JailEnabled:                true,
-				BadRequestsThresholdCount:  3,
-				BadRequestsThresholdPeriodSecs: 10,
-				JailTimeDurationSecs:           10,
-			},
+			name:                           "Adds remediation header when request is blocked",
+			request:                        req.Clone(req.Context()),
+			wafResponse:                    response{StatusCode: 403, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from waf",
+			expectStatus:                   403,
+			modSecurityStatusRequestHeader: "X-Waf-Block",
+			expectHeader:                   "X-Waf-Block",
+			expectHeaderValue:              "403",
+		},
+		{
+			name:                           "Does not add remediation header when request is allowed",
+			request:                        req.Clone(req.Context()),
+			wafResponse:                    response{StatusCode: 200, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from service",
+			expectStatus:                   200,
+			modSecurityStatusRequestHeader: "X-Waf-Block",
+			expectHeader:                   "",
+			expectHeaderValue:              "",
+		},
+		{
+			name:                           "Adds remediation header with different status codes",
+			request:                        req.Clone(req.Context()),
+			wafResponse:                    response{StatusCode: 406, Body: "Response from waf"},
+			serviceResponse:                serviceResponse,
+			expectBody:                     "Response from waf",
+			expectStatus:                   406,
+			modSecurityStatusRequestHeader: "X-Remediation-Info",
+			expectHeader:                   "X-Remediation-Info",
+			expectHeaderValue:              "406",
 		},
 	}
 
@@ -126,17 +138,9 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			})
 
 			config := &Config{
-				TimeoutMillis:              2000,
-				ModSecurityUrl:             modsecurityMockServer.URL,
-				JailEnabled:                tt.jailEnabled,
-				BadRequestsThresholdCount:  25,
-				BadRequestsThresholdPeriodSecs: 600,
-				JailTimeDurationSecs:           600,
-			}
-
-			if tt.jailEnabled && tt.jailConfig != nil {
-				config = tt.jailConfig
-				config.ModSecurityUrl = modsecurityMockServer.URL
+				TimeoutMillis:                  2000,
+				ModSecurityUrl:                 modsecurityMockServer.URL,
+				ModSecurityStatusRequestHeader: tt.modSecurityStatusRequestHeader,
 			}
 
 			middleware, err := New(context.Background(), httpServiceHandler, config, "modsecurity-middleware")
@@ -145,20 +149,21 @@ func TestModsecurity_ServeHTTP(t *testing.T) {
 			}
 
 			rw := httptest.NewRecorder()
-
-			for i := 0; i < config.BadRequestsThresholdCount; i++ {
-				middleware.ServeHTTP(rw, tt.request.Clone(tt.request.Context()))
-				if tt.jailEnabled && i < config.BadRequestsThresholdCount-1 {
-					assert.Equal(t, tt.wafResponse.StatusCode, rw.Result().StatusCode)
-				}
-			}
-
-			rw = httptest.NewRecorder()
 			middleware.ServeHTTP(rw, tt.request.Clone(tt.request.Context()))
 			resp := rw.Result()
 			body, _ := io.ReadAll(resp.Body)
 			assert.Equal(t, tt.expectBody, string(body))
 			assert.Equal(t, tt.expectStatus, resp.StatusCode)
+
+			// Check for expected status header in request (not response)
+			if tt.expectHeader != "" {
+				assert.Equal(t, tt.expectHeaderValue, tt.request.Header.Get(tt.expectHeader), "Expected status header in request with correct value")
+			} else {
+				// When no header is expected, ensure no status header was added to request
+				if tt.modSecurityStatusRequestHeader != "" {
+					assert.Empty(t, tt.request.Header.Get(tt.modSecurityStatusRequestHeader), "No status header should be present in request")
+				}
+			}
 		})
 	}
 }

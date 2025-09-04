@@ -19,20 +19,24 @@ import (
 type Config struct {
 	TimeoutMillis                  int64  `json:"timeoutMillis,omitempty"`
 	ModSecurityUrl                 string `json:"modSecurityUrl,omitempty"`
-	JailEnabled                    bool   `json:"jailEnabled,omitempty"`
-	BadRequestsThresholdCount      int    `json:"badRequestsThresholdCount,omitempty"`
-	BadRequestsThresholdPeriodSecs int    `json:"badRequestsThresholdPeriodSecs,omitempty"` // Period in seconds to track attempts
-	JailTimeDurationSecs           int    `json:"jailTimeDurationSecs,omitempty"`                     // How long a client spends in Jail in seconds
+	UnhealthyWafBackOffPeriodSecs  int    `json:"unhealthyWafBackOffPeriodSecs,omitempty"`  // If the WAF is unhealthy, back off
+	ModSecurityStatusRequestHeader string `json:"modSecurityStatusRequestHeader,omitempty"` // Header name to add to request when blocked (for logging)
+	MaxConnsPerHost                int    `json:"maxConnsPerHost,omitempty"`                // Maximum connections per host (0 = unlimited, original default)
+	MaxIdleConnsPerHost            int    `json:"maxIdleConnsPerHost,omitempty"`            // Maximum idle connections per host (0 = unlimited, original default)
+	ResponseHeaderTimeoutMillis    int64  `json:"responseHeaderTimeoutMillis,omitempty"`    // Timeout for response headers (0 = no timeout, original default)
+	ExpectContinueTimeoutMillis    int64  `json:"expectContinueTimeoutMillis,omitempty"`    // Timeout for Expect: 100-continue (default 1000ms)
 }
 
 // CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
-		TimeoutMillis:                  2000,
-		JailEnabled:                    false,
-		BadRequestsThresholdCount:      25,
-		BadRequestsThresholdPeriodSecs: 600,
-		JailTimeDurationSecs:           600,
+		TimeoutMillis:                  2000, // Original default: 2 seconds
+		UnhealthyWafBackOffPeriodSecs:  0,    // 0 to NOT backoff (original behaviour)
+		ModSecurityStatusRequestHeader: "",   // Empty string means no header will be added
+		MaxConnsPerHost:                0,    // 0 = unlimited connections per host (original default)
+		MaxIdleConnsPerHost:            0,    // 0 = unlimited idle connections per host (original default)
+		ResponseHeaderTimeoutMillis:    0,    // 0 = no response header timeout (original default)
+		ExpectContinueTimeoutMillis:    1000, // 1 second (original default)
 	}
 }
 
@@ -43,13 +47,10 @@ type Modsecurity struct {
 	name                           string
 	httpClient                     *http.Client
 	logger                         *log.Logger
-	jailEnabled                    bool
-	badRequestsThresholdCount      int
-	badRequestsThresholdPeriodSecs int
-	jailTimeDurationSecs           int
-	jail                           map[string][]time.Time
-	jailRelease                    map[string]time.Time
-	jailMutex                      sync.RWMutex
+	unhealthyWafBackOffPeriodSecs  int
+	unhealthyWaf                   bool // If the WAF is unhealthy
+	unhealthyWafMutex              sync.Mutex
+	modSecurityStatusRequestHeader string // Header name to add to request when blocked (for logging)
 }
 
 // New creates a new Modsecurity plugin with the given configuration.
@@ -59,10 +60,10 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("modSecurityUrl cannot be empty")
 	}
 
-	// Use a custom client with predefined timeout of 2 seconds
+	// Use a custom client with configurable timeout
 	var timeout time.Duration
 	if config.TimeoutMillis == 0 {
-		timeout = 2 * time.Second
+		timeout = 2 * time.Second // Original default: 2 seconds
 	} else {
 		timeout = time.Duration(config.TimeoutMillis) * time.Millisecond
 	}
@@ -73,7 +74,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		KeepAlive: 30 * time.Second,
 	}
 
-	// transport is a custom http.Transport with various timeouts and configurations for optimal performance.
+	// transport is a custom http.Transport with configurable timeouts and connection limits
 	transport := &http.Transport{
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
@@ -88,18 +89,32 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		},
 	}
 
+	// Configure connection limits (0 = unlimited, original behavior)
+	if config.MaxConnsPerHost > 0 {
+		transport.MaxConnsPerHost = config.MaxConnsPerHost
+	}
+	if config.MaxIdleConnsPerHost > 0 {
+		transport.MaxIdleConnsPerHost = config.MaxIdleConnsPerHost
+	}
+
+	// Configure response header timeout (0 = no timeout, original behavior)
+	if config.ResponseHeaderTimeoutMillis > 0 {
+		transport.ResponseHeaderTimeout = time.Duration(config.ResponseHeaderTimeoutMillis) * time.Millisecond
+	}
+
+	// Configure Expect: 100-continue timeout
+	if config.ExpectContinueTimeoutMillis > 0 {
+		transport.ExpectContinueTimeout = time.Duration(config.ExpectContinueTimeoutMillis) * time.Millisecond
+	}
+
 	return &Modsecurity{
 		modSecurityUrl:                 config.ModSecurityUrl,
 		next:                           next,
 		name:                           name,
 		httpClient:                     &http.Client{Timeout: timeout, Transport: transport},
 		logger:                         log.New(os.Stdout, "", log.LstdFlags),
-		jailEnabled:                    config.JailEnabled,
-		badRequestsThresholdCount:      config.BadRequestsThresholdCount,
-		badRequestsThresholdPeriodSecs: config.BadRequestsThresholdPeriodSecs,
-		jailTimeDurationSecs:           config.JailTimeDurationSecs,
-		jail:                           make(map[string][]time.Time),
-		jailRelease:                    make(map[string]time.Time),
+		unhealthyWafBackOffPeriodSecs:  config.UnhealthyWafBackOffPeriodSecs,
+		modSecurityStatusRequestHeader: config.ModSecurityStatusRequestHeader,
 	}, nil
 }
 
@@ -109,18 +124,13 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	clientIP := req.RemoteAddr
-
-	// Check if the client is in jail, if jail is enabled
-	if a.jailEnabled {
-		a.jailMutex.RLock()
-		if a.isClientInJail(clientIP) {
-			a.jailMutex.RUnlock()
-			a.logger.Printf("client %s is jailed", clientIP)
-			http.Error(rw, "Too Many Requests", http.StatusTooManyRequests)
-			return
+	// If the WAF is unhealthy just forward the request early. No concurrency control here on purpose.
+	if a.unhealthyWaf {
+		if a.modSecurityStatusRequestHeader != "" {
+			req.Header.Set(a.modSecurityStatusRequestHeader, "unhealthy")
 		}
-		a.jailMutex.RUnlock()
+		a.next.ServeHTTP(rw, req)
+		return
 	}
 
 	// Buffer the body if we want to read it here and send it in the request.
@@ -132,11 +142,13 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	req.Body = io.NopCloser(bytes.NewReader(body))
 
-	// Create a new URL from the raw RequestURI sent by the client
-	url := fmt.Sprintf("%s%s", a.modSecurityUrl, req.RequestURI)
+	url := a.modSecurityUrl + req.RequestURI
 
 	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
 	if err != nil {
+		if a.modSecurityStatusRequestHeader != "" {
+			req.Header.Set(a.modSecurityStatusRequestHeader, "cannotforward")
+		}
 		a.logger.Printf("fail to prepare forwarded request: %s", err.Error())
 		http.Error(rw, "", http.StatusBadGateway)
 		return
@@ -150,6 +162,26 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	resp, err := a.httpClient.Do(proxyReq)
 	if err != nil {
+		if a.unhealthyWafBackOffPeriodSecs > 0 {
+			a.unhealthyWafMutex.Lock()
+			if !a.unhealthyWaf {
+				a.logger.Printf("marking modsec as unhealthy for %ds fail to send HTTP request to modsec: %s", a.unhealthyWafBackOffPeriodSecs, err.Error())
+				a.unhealthyWaf = true
+				if a.modSecurityStatusRequestHeader != "" {
+					req.Header.Set(a.modSecurityStatusRequestHeader, "error")
+				}
+				time.AfterFunc(time.Duration(a.unhealthyWafBackOffPeriodSecs)*time.Second, func() {
+					a.unhealthyWafMutex.Lock()
+					defer a.unhealthyWafMutex.Unlock()
+					a.unhealthyWaf = false
+					a.logger.Printf("modsec unhealthy backoff expired")
+				})
+			}
+			a.unhealthyWafMutex.Unlock()
+			a.next.ServeHTTP(rw, req)
+			return
+		}
+
 		a.logger.Printf("fail to send HTTP request to modsec: %s", err.Error())
 		http.Error(rw, "", http.StatusBadGateway)
 		return
@@ -157,8 +189,9 @@ func (a *Modsecurity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		if resp.StatusCode == http.StatusForbidden && a.jailEnabled {
-			a.recordOffense(clientIP)
+		// Add remediation header to request if configured (for logging purposes)
+		if a.modSecurityStatusRequestHeader != "" {
+			req.Header.Set(a.modSecurityStatusRequestHeader, fmt.Sprintf("%d", resp.StatusCode))
 		}
 		forwardResponse(resp, rw)
 		return
@@ -177,59 +210,12 @@ func isWebsocket(req *http.Request) bool {
 }
 
 func forwardResponse(resp *http.Response, rw http.ResponseWriter) {
-	// Copy headers
+	dst := rw.Header()
 	for k, vv := range resp.Header {
-		for _, v := range vv {
-			rw.Header().Add(k, v)
-		}
+		dst[k] = append(dst[k][:0], vv...)
 	}
 	// Copy status
 	rw.WriteHeader(resp.StatusCode)
 	// Copy body
 	io.Copy(rw, resp.Body)
-}
-
-func (a *Modsecurity) recordOffense(clientIP string) {
-	a.jailMutex.Lock()
-	defer a.jailMutex.Unlock()
-
-	now := time.Now()
-	// Remove offenses that are older than the threshold period
-	if offenses, exists := a.jail[clientIP]; exists {
-		var newOffenses []time.Time
-		for _, offense := range offenses {
-			if now.Sub(offense) <= time.Duration(a.badRequestsThresholdPeriodSecs)*time.Second {
-				newOffenses = append(newOffenses, offense)
-			}
-		}
-		a.jail[clientIP] = newOffenses
-	}
-
-	// Record the new offense
-	a.jail[clientIP] = append(a.jail[clientIP], now)
-
-	// Check if the client should be jailed
-	if len(a.jail[clientIP]) >= a.badRequestsThresholdCount {
-		a.logger.Printf("client %s reached threshold, putting in jail", clientIP)
-		a.jailRelease[clientIP] = now.Add(time.Duration(a.jailTimeDurationSecs) * time.Second)
-	}
-}
-
-func (a *Modsecurity) isClientInJail(clientIP string) bool {
-	if releaseTime, exists := a.jailRelease[clientIP]; exists {
-		if time.Now().Before(releaseTime) {
-			return true
-		}
-		a.releaseFromJail(clientIP)
-	}
-	return false
-}
-
-func (a *Modsecurity) releaseFromJail(clientIP string) {
-	a.jailMutex.Lock()
-	defer a.jailMutex.Unlock()
-
-	delete(a.jail, clientIP)
-	delete(a.jailRelease, clientIP)
-	a.logger.Printf("client %s released from jail", clientIP)
 }

@@ -23,7 +23,6 @@ services:
       # use traefiks built-in maxRequestBodyBytes middleware - there's no need for us to bake this ourselves
       - traefik.http.middlewares.limit.buffering.maxRequestBodyBytes=1048576
       - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.modSecurityUrl=http://waf:8080
-      - traefik.http.middlewares.waf.plugin.traefik-modsecurity-plugin.jailEnabled=true
 
   waf:
     image: owasp/modsecurity-crs:4.3.0-apache-alpine-202406090906

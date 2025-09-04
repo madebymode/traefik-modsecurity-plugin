@@ -1,0 +1,252 @@
+name: Integration Tests
+
+on:
+  push:
+    branches:
+    - main
+    - master
+    - develop
+  pull_request:
+    branches:
+    - main
+    - master
+    - develop
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install PowerShell and Pester
+      run: |
+        # Set non-interactive mode to avoid prompts
+        export DEBIAN_FRONTEND=noninteractive
+        
+        # Update package lists
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https software-properties-common
+        
+        # Download and install Microsoft signing key and repository
+        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        
+        # Use dpkg with force-confdef and force-confold to handle config conflicts automatically
+        sudo dpkg --force-confdef --force-confold -i packages-microsoft-prod.deb
+        
+        # Install PowerShell
+        sudo apt-get update
+        sudo apt-get install -y powershell
+        
+        # Install Pester testing framework
+        pwsh -c "Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber"
+
+    - name: Verify Docker Compose file
+      run: |
+        if [ ! -f "docker-compose.test.yml" ]; then
+          echo "❌ docker-compose.test.yml not found"
+          exit 1
+        fi
+        echo "✅ Docker Compose test file found"
+        
+        # Validate Docker Compose file
+        docker compose -f docker-compose.test.yml config
+
+    - name: Pull Docker Images
+      run: |
+        echo "🔄 Pulling required Docker images..."
+        docker compose -f docker-compose.test.yml pull
+        echo "✅ Docker images pulled successfully"
+
+    - name: Start Test Services
+      run: |
+        echo "🔄 Starting test services..."
+        docker compose -f docker-compose.test.yml up -d
+        echo "✅ Test services started"
+        
+        echo "📋 Running containers:"
+        docker compose -f docker-compose.test.yml ps
+
+    - name: Wait for Services to be Ready
+      shell: pwsh
+      run: |
+        Write-Host "🔄 Waiting for services to be ready..." -ForegroundColor Cyan
+        
+        function Test-ServiceHealth {
+            param([string]$Url, [string]$ServiceName, [int]$TimeoutSeconds = 30)
+            
+            Write-Host "Checking $ServiceName..." -ForegroundColor Yellow
+            $elapsed = 0
+            $interval = 3
+            
+            do {
+                try {
+                    $response = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec 5 -UseBasicParsing
+                    if ($response.StatusCode -eq 200) {
+                        Write-Host "✅ $ServiceName is ready!" -ForegroundColor Green
+                        return $true
+                    }
+                } catch {
+                    # Service not ready, continue waiting
+                }
+                
+                Start-Sleep $interval
+                $elapsed += $interval
+                
+                if ($elapsed % 15 -eq 0) {
+                    Write-Host "  Still waiting for $ServiceName... ($elapsed/$TimeoutSeconds seconds)" -ForegroundColor Gray
+                }
+                
+            } while ($elapsed -lt $TimeoutSeconds)
+            
+            Write-Host "❌ $ServiceName failed to become ready within $TimeoutSeconds seconds" -ForegroundColor Red
+            return $false
+        }
+        
+        # Test each service
+        $services = @(
+            @{ Url = "http://localhost:8080/api/rawdata"; Name = "Traefik API" },
+            @{ Url = "http://localhost:8000/bypass"; Name = "Bypass Service" },
+            @{ Url = "http://localhost:8000/protected"; Name = "Protected Service" }
+        )
+        
+        $allReady = $true
+        foreach ($service in $services) {
+            if (-not (Test-ServiceHealth -Url $service.Url -ServiceName $service.Name)) {
+                $allReady = $false
+                break
+            }
+        }
+        
+        if (-not $allReady) {
+            Write-Host "❌ Not all services became ready" -ForegroundColor Red
+            exit 1
+        }
+        
+        Write-Host "✅ All services are ready for testing!" -ForegroundColor Green
+
+    - name: Run Integration Tests
+      shell: pwsh
+      run: |
+        Write-Host "🧪 Running Pester integration tests..." -ForegroundColor Cyan
+        
+        # Import Pester module
+        Import-Module Pester -Force
+        
+        # Configure Pester
+        $pesterConfig = New-PesterConfiguration
+        $pesterConfig.Run.Path = "./scripts/integration-tests.Tests.ps1"
+        $pesterConfig.Output.Verbosity = 'Detailed'
+        $pesterConfig.Run.Exit = $false
+        $pesterConfig.Run.PassThru = $true
+        
+        # Run tests
+        $result = Invoke-Pester -Configuration $pesterConfig
+        
+        # Report results
+        Write-Host ""
+        Write-Host "📊 Test Results Summary:" -ForegroundColor Cyan
+        Write-Host "  Total: $($result.TotalCount)" -ForegroundColor White
+        Write-Host "  Passed: $($result.PassedCount)" -ForegroundColor Green
+        Write-Host "  Failed: $($result.FailedCount)" -ForegroundColor Red
+        Write-Host "  Skipped: $($result.SkippedCount)" -ForegroundColor Yellow
+        
+        if ($result.FailedCount -gt 0) {
+            Write-Host "❌ $($result.FailedCount) test(s) failed" -ForegroundColor Red
+            exit 1
+        } else {
+            Write-Host "✅ All tests passed! 🎉" -ForegroundColor Green
+        }
+
+    - name: Show Container Logs on Failure
+      if: failure()
+      run: |
+        echo "📋 Container Status:"
+        docker compose -f docker-compose.test.yml ps
+        
+        echo ""
+        echo "📝 Service Logs:"
+        echo "==================== Traefik Logs ===================="
+        docker compose -f docker-compose.test.yml logs traefik --tail=50
+        
+        echo ""
+        echo "==================== WAF Logs ===================="
+        docker compose -f docker-compose.test.yml logs waf --tail=50
+        
+        echo ""
+        echo "==================== Protected Service Logs ===================="
+        docker compose -f docker-compose.test.yml logs whoami-protected --tail=50
+        
+        echo ""
+        echo "==================== Bypass Service Logs ===================="
+        docker compose -f docker-compose.test.yml logs whoami-bypass --tail=50
+
+    - name: Cleanup Test Environment
+      if: always()
+      run: |
+        echo "🧹 Cleaning up test environment..."
+        docker compose -f docker-compose.test.yml down -v --remove-orphans
+        echo "✅ Cleanup completed"
+
+  # Additional job to test the PowerShell runner script
+  test-runner-script:
+    name: Test Runner Script Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Install PowerShell
+      run: |
+        export DEBIAN_FRONTEND=noninteractive
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https software-properties-common
+        wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+        sudo dpkg --force-confdef --force-confold -i packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y powershell
+        
+    - name: Validate Test Runner Script
+      shell: pwsh
+      run: |
+        # Check if the script exists and is valid PowerShell
+        if (-not (Test-Path "./Test-Integration.ps1")) {
+            Write-Host "❌ Test-Integration.ps1 not found" -ForegroundColor Red
+            exit 1
+        }
+        
+        # Basic syntax validation
+        try {
+            $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content "./Test-Integration.ps1" -Raw), [ref]$null)
+            Write-Host "✅ Test-Integration.ps1 syntax is valid" -ForegroundColor Green
+        } catch {
+            Write-Host "❌ Test-Integration.ps1 has syntax errors: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+        }
+        
+        # Check for required test files
+        $requiredFiles = @(
+            "./docker-compose.test.yml",
+            "./scripts/integration-tests.Tests.ps1"
+        )
+        
+        foreach ($file in $requiredFiles) {
+            if (Test-Path $file) {
+                Write-Host "✅ Found: $file" -ForegroundColor Green
+            } else {
+                Write-Host "❌ Missing: $file" -ForegroundColor Red
+                exit 1
+            }
+        }
+        
+        Write-Host "✅ All required files are present" -ForegroundColor Green
