@@ -62,6 +62,12 @@ This plugin supports these configuration:
 * `JailTimeDurationSecs`:  (optional) how long a client will be jailed for, in seconds
 * `badRequestsThresholdCount`: (optional) # of 403s a clientIP can trigger from OWASP before being adding to jail
 * `badRequestsThresholdPeriodSecs` (optional) # the period, in seconds, that the threshold must meet before a client is added to the 429 jail
+* `unhealthyWafBackOffPeriodSecs`: (optional) if greater than `0`, transport failures talking to modsecurity temporarily bypass the WAF for the configured number of seconds instead of returning `502`
+* `bypassOnModSecurity502`: (optional) if `true`, a `502` returned by modsecurity also marks the WAF unhealthy and activates the same temporary bypass
+* `alertThrottlePeriodSecs`: (optional) minimum interval between duplicate unhealthy/recovered alerts. (default 300 seconds)
+* `alertWebhookUrl`: (optional) webhook URL that receives JSON alerts when the WAF becomes unhealthy or recovers
+* `telegramBotToken`: (optional) Telegram bot token for alerts. Must be configured together with `telegramChatId`
+* `telegramChatId`: (optional) Telegram chat ID for alerts. Must be configured together with `telegramBotToken`
 
 ## Local development (docker-compose.local.yml)
 
